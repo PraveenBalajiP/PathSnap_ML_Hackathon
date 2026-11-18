@@ -4,3 +4,4 @@ train
 student_test
 evaluator_test.zip
 evaluator_test
+__init__.py
