@@ -18,7 +18,7 @@ from pyproj import Transformer
 from shapely import STRtree, linestrings, points as shp_points
 
 CRS_UTM = "EPSG:32632"
-_tf = Transformer.from_crs("EPSG:4326", CRS_UTM, always_xy=True)
+_tf_cache = {}
 
 
 # ----------------------------------------------------------------- loading
@@ -37,8 +37,24 @@ def load_trip(folder, trip_id, need_route=True):
     return dict(track=track, nodes=nodes, arcs=arcs, route=route)
 
 
+def get_projected_crs(lonlat):
+    """Select the WGS84 UTM zone for the coordinate's mean location."""
+    finite = np.asarray(lonlat)[np.isfinite(lonlat).all(axis=1)]
+    if len(finite) == 0:
+        return CRS_UTM
+    lon = float(np.mean(finite[:, 0]))
+    lat = float(np.mean(finite[:, 1]))
+    zone = int(np.clip((lon + 180) // 6 + 1, 1, 60))
+    epsg = (32600 if lat >= 0 else 32700) + zone
+    return f"EPSG:{epsg}"
+
+
 def project(lonlat):
-    x, y = _tf.transform(lonlat[:, 0], lonlat[:, 1])
+    lonlat = np.asarray(lonlat)
+    crs = get_projected_crs(lonlat)
+    if crs not in _tf_cache:
+        _tf_cache[crs] = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    x, y = _tf_cache[crs].transform(lonlat[:, 0], lonlat[:, 1])
     return np.column_stack([x, y])
 
 
@@ -61,9 +77,17 @@ def validate_track(track):
 def build_network(nodes_ll, arcs):
     """Project nodes, build arc geometry, mask degenerate arcs."""
     nxy = project(nodes_ll)
-    a, b = nxy[arcs[:, 0]], nxy[arcs[:, 1]]
+    node_valid = np.isfinite(nxy).all(axis=1)
+    arc_valid = (
+        (arcs[:, 0] >= 0) & (arcs[:, 0] < len(nxy))
+        & (arcs[:, 1] >= 0) & (arcs[:, 1] < len(nxy))
+    )
+    safe_a = arcs[:, 0].clip(min=0, max=len(nxy) - 1)
+    safe_b = arcs[:, 1].clip(min=0, max=len(nxy) - 1)
+    arc_valid &= node_valid[safe_a] & node_valid[safe_b]
+    a, b = nxy[safe_a], nxy[safe_b]
     length = np.hypot(*(b - a).T)
-    valid = length > 0.5                     # drop zero / sub-0.5 m arcs from the index
+    valid = arc_valid & np.isfinite(length) & (length > 0.5)
     bearing = np.degrees(np.arctan2(b[:, 0] - a[:, 0], b[:, 1] - a[:, 1])) % 360  # 0=N, clockwise
     return dict(nxy=nxy, a=a, b=b, length=length, valid=valid, bearing=bearing, arcs=arcs)
 
@@ -117,6 +141,10 @@ def assign_reference_arcs(xy, route, net):
     """Monotone assignment of GPS points to reference route arcs.
     dp[i, j] = d(i, route[j]) + min_{k<=j} dp[i-1, k]   (order preserved)
     Returns (label_arc_id per point, distance to that arc)."""
+    route = np.asarray(route, dtype=np.int64)
+    route = route[(route >= 0) & (route < len(net["a"])) & net["valid"][route]]
+    if len(route) == 0:
+        raise ValueError("route contains no valid arcs")
     a, b = net["a"][route], net["b"][route]
     n, m = len(xy), len(route)
     D = np.empty((n, m))
@@ -127,16 +155,21 @@ def assign_reference_arcs(xy, route, net):
     for i in range(1, n):
         prev = dp[i - 1]
         cm = np.minimum.accumulate(prev)                 # best cost over k<=j
-        # argmin index of running min
-        idx = np.arange(m)
-        is_new = np.r_[True, prev[1:] < cm[:-1]]
-        am = np.maximum.accumulate(np.where(is_new, idx, 0))
+        am = np.zeros(m, dtype=np.int32)
+        best = prev[0]
+        best_idx = 0
+        for j in range(m):
+            if prev[j] < best:
+                best = prev[j]
+                best_idx = j
+            am[j] = best_idx
         dp[i] = D[i] + cm
         bp[i] = am
     j = int(np.argmin(dp[-1])); path = np.empty(n, dtype=np.int64)
-    for i in range(n - 1, -1, -1):
+    for i in range(n - 1, 0, -1):
         path[i] = j
         j = bp[i, j]
+    path[0] = j
     return route[path], D[np.arange(n), path], path
 
 
