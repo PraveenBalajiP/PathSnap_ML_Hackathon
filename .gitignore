@@ -1,0 +1,6 @@
+.venv
+__pycache__
+train
+student_test
+evaluator_test.zip
+evaluator_test
