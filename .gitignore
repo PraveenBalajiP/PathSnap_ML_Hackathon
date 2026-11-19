@@ -1,5 +1,48 @@
-student_test
-train
-processed 
+.venv
 __pycache__
-files(1).zip
+train
+student_test
+evaluator_test.zip
+evaluator_test
+__init__.py
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+.ipynb_checkpoints/
+
+# Generated model files
+*.joblib
+*.pkl
+*.pickle
+*.h5
+*.keras
+*.pth
+*.pt
+*.onnx
+
+# Large generated outputs
+model_results/
+
+# Python environments
+.venv/
+venv/
+__pycache__/
+.ipynb_checkpoints/
+
+# Model artifacts
+*.joblib
+*.pkl
+*.pickle
+*.h5
+*.keras
+*.pth
+*.pt
+*.onnx
+
+# Generated model results
+model_results/
+
+# Large processed datasets
+processed_datasets/student_test_candidates.csv
+processed_datasets/training_candidates.csv
